@@ -189,3 +189,55 @@ CAST(t.tenure AS INT)                                     AS tenure,
 CAST(t.MonthlyCharges AS FLOAT)                           AS MonthlyCharges,
 CAST(NULLIF(REPLACE(t.TotalCharges,' ',''),'') AS FLOAT)  AS TotalCharges
 ```
+## Análisis Exploratorio de Datos e Insights (EDA)
+
+En este apartado, se plantearon 15 casuísticas agrupadas por bloques,
+planteando una solución e interpretación para cada caso.
+
+---
+### BLOQUE A: Fundamentos de Retención y KPIs de Deserción
+
+**Pregunta #1 — Termómetro de Churn Global:** ¿Cuál es la tasa de deserción
+total de la compañía y cuánto revenue mensual se pierde por los clientes
+que abandonaron el servicio?
+
+Para determinar el estado general de deserción utilicé funciones de agregación
+como `SUM`, `COUNT` y `AVG` combinadas con `CASE WHEN` para separar clientes
+activos de desertores por tipo de contrato, calculando el revenue en riesgo
+mediante `Fact_Customers` unida a `Dim_Churn` y `Dim_Contrato` con `INNER JOIN`.
+
+```sql
+SELECT
+    ct.Contract                                                    AS Tipo_Contrato,
+    COUNT(*)                                                       AS Total_Clientes,
+    SUM(CASE WHEN ch.Churn = 'Yes' THEN 1 ELSE 0 END)            AS Total_Churn,
+    SUM(CASE WHEN ch.Churn = 'No'  THEN 1 ELSE 0 END)            AS Total_Activos,
+    ROUND(
+        CAST(SUM(CASE WHEN ch.Churn = 'Yes' THEN 1 ELSE 0 END) AS FLOAT)
+        / COUNT(*) * 100, 2
+    )                                                              AS Tasa_Churn_Pct,
+    ROUND(SUM(CASE WHEN ch.Churn = 'Yes' THEN f.MonthlyCharges ELSE 0 END), 2)
+                                                                   AS Revenue_En_Riesgo,
+    ROUND(AVG(f.MonthlyCharges), 2)                               AS Cargo_Promedio
+FROM Fact_Customers f
+JOIN Dim_Churn    ch ON f.ChurnID    = ch.ChurnID
+JOIN Dim_Contrato ct ON f.ContractID = ct.ContractID
+GROUP BY ct.Contract
+ORDER BY Tasa_Churn_Pct DESC;
+```
+
+![P1 Termómetro Churn Global](./Picture/P1_Churn_Global.png)
+
+**Resultado Obtenido:**
+
+Los resultados revelan una brecha crítica entre modalidades contractuales.
+Los clientes **Month-to-month** presentan la tasa de churn más alarmante con
+un **42.71%**, concentrando **$120,847.10** del revenue mensual en riesgo 
+el **86.9% del total perdido**  con 1,655 desertores sobre 3,875 clientes.
+En contraste, los contratos **Two year** muestran una tasa mínima de apenas
+**2.83%** con solo $4,165.30 en riesgo, confirmando que el compromiso
+contractual a largo plazo es el principal escudo contra la deserción.
+La compañía debe priorizar la migración de clientes mensuales hacia
+contratos anuales o bianuales como estrategia central de retención.
+
+
