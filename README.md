@@ -659,3 +659,284 @@ masivamente a los clientes nuevos en sus primeros 12 meses y proteger
 individualmente a los clientes de alto valor con larga antigüedad
 mediante programas de fidelización exclusivos.
 
+---
+
+### BLOQUE C: Inteligencia Predictiva y Scoring de Retención
+
+**Pregunta #11 — Monitor de Valor Acumulado (Running Total):** ¿Cuál es la
+evolución acumulada del `TotalCharges` por segmento de contrato y en qué
+punto cada grupo alcanza el primer hito crítico de valor generado para
+la compañía?
+
+Para calcular el revenue acumulado por tipo de contrato utilicé una **CTE**
+combinada con la **Window Function** `SUM() OVER (PARTITION BY ... ORDER BY)`
+para construir el acumulado progresivo por segmento contractual.
+
+```sql
+WITH TotalPorContrato AS (
+    SELECT
+        ct.Contract             AS Tipo_Contrato,
+        f.customerID,
+        f.TotalCharges,
+        SUM(f.TotalCharges) OVER (
+            PARTITION BY ct.Contract
+            ORDER BY f.TotalCharges DESC
+        )                       AS Acumulado_Revenue
+    FROM Fact_Customers f
+    JOIN Dim_Contrato ct ON f.ContractID = ct.ContractID
+    WHERE f.TotalCharges IS NOT NULL
+)
+SELECT TOP 10
+    Tipo_Contrato,
+    ROUND(MAX(Acumulado_Revenue), 2) AS Revenue_Total_Acumulado,
+    COUNT(customerID)                AS Total_Clientes,
+    ROUND(MIN(TotalCharges), 2)      AS CLV_Minimo,
+    ROUND(MAX(TotalCharges), 2)      AS CLV_Maximo
+FROM TotalPorContrato
+GROUP BY Tipo_Contrato
+ORDER BY Revenue_Total_Acumulado DESC;
+```
+
+![P11 Monitor Valor Acumulado](./Picture/P11_Monitor_Valor_Acumulado.png)
+
+**Resultado Obtenido:**
+
+Los contratos **Dos Años** generan el mayor revenue acumulado con
+**$6,283,253.7** a pesar de tener solo 1,685 clientes, con un CLV máximo
+de **$8,672.45** — el más alto de los tres segmentos. Los contratos
+**Mes a Mes** acumulan **$5,305,861.5** con 3,875 clientes pero un CLV
+máximo de apenas $8,061.5, evidenciando que necesitan más del doble de
+clientes para generar un revenue similar. Los contratos **Un Año** con
+1,472 clientes acumulan **$4,467,053.5** con CLV máximo de $8,684.8.
+Esto confirma que los contratos largos no solo retienen mejor sino que
+generan significativamente más valor por cliente, siendo la migración
+hacia contratos bianuales la palanca de mayor impacto económico para
+la compañía.
+
+**Pregunta #12 — Scoring de Riesgo de Churn:** ¿Cómo se clasifican todos
+los clientes activos en segmentos de riesgo Alto, Medio y Bajo utilizando
+un score compuesto de variables contractuales, de servicio y de valor,
+para priorizar las acciones de retención?
+
+Para construir el scoring de riesgo utilicé una **CTE** que asigna puntos
+por tipo de contrato, rango de cargo mensual y antigüedad mediante `CASE WHEN`
+encadenados, clasificando finalmente cada cliente activo en tres niveles
+de riesgo según su puntuación total.
+
+```sql
+WITH ScoreClientes AS (
+    SELECT
+        f.customerID,
+        ct.Contract,
+        f.MonthlyCharges,
+        f.tenure,
+        CASE WHEN ct.Contract      = 'Month-to-month' THEN 3
+             WHEN ct.Contract      = 'One year'        THEN 2
+             ELSE                                           1
+        END +
+        CASE WHEN f.MonthlyCharges >= 66 THEN 3
+             WHEN f.MonthlyCharges >= 36 THEN 2
+             ELSE                             1
+        END +
+        CASE WHEN f.tenure <= 12 THEN 3
+             WHEN f.tenure <= 24 THEN 2
+             ELSE                     1
+        END                         AS Score_Riesgo
+    FROM Fact_Customers f
+    JOIN Dim_Contrato ct ON f.ContractID = ct.ContractID
+    JOIN Dim_Churn    ch ON f.ChurnID    = ch.ChurnID
+    WHERE ch.Churn = 'No'
+)
+SELECT
+    CASE WHEN Score_Riesgo >= 7 THEN 'Alto Riesgo'
+         WHEN Score_Riesgo >= 5 THEN 'Riesgo Medio'
+         ELSE                        'Bajo Riesgo'
+    END                         AS Segmento_Riesgo,
+    COUNT(*)                    AS Total_Clientes,
+    ROUND(AVG(MonthlyCharges), 2) AS Cargo_Promedio,
+    ROUND(AVG(CAST(tenure AS FLOAT)), 2) AS Antiguedad_Promedio
+FROM ScoreClientes
+GROUP BY
+    CASE WHEN Score_Riesgo >= 7 THEN 'Alto Riesgo'
+         WHEN Score_Riesgo >= 5 THEN 'Riesgo Medio'
+         ELSE                        'Bajo Riesgo'
+    END
+ORDER BY Total_Clientes DESC;
+```
+
+![P12 Scoring Riesgo Churn](./Picture/P12_Scoring_Riesgo_Churn.png)
+
+**Resultado Obtenido:**
+
+El scoring revela que de los 5,174 clientes activos, **2,223 están en
+Riesgo Medio** (43%), **1,941 en Alto Riesgo** (37.5%) y solo **1,010
+en Bajo Riesgo** (19.5%). El segmento de **Alto Riesgo** presenta una
+antigüedad promedio de apenas **18.63 meses** con cargo promedio de
+$66.26, confirmando que son clientes relativamente nuevos con contratos
+costosos — la combinación más peligrosa. El equipo de Customer Success
+debe priorizar intervención inmediata sobre los 1,941 clientes de alto
+riesgo antes de que completen su primer año y decidan abandonar el servicio.
+
+**Pregunta #13 — Benchmarking de Clientes en Riesgo:** ¿Cuáles son los
+clientes activos cuyo perfil de antigüedad, cargo mensual y servicios
+contratados es más similar al perfil promedio histórico de los clientes
+que ya realizaron churn?
+
+Para identificar clientes activos con perfil similar al desertor histórico,
+utilicé una **CTE** para calcular el perfil promedio de churn y un
+`CROSS JOIN` para comparar cada cliente activo contra ese benchmark,
+usando `ABS()` para calcular la diferencia absoluta y `ROW_NUMBER`
+implícito con `ORDER BY Score_Similitud ASC` para rankear por similitud.
+
+```sql
+WITH PerfilChurn AS (
+    SELECT
+        AVG(f.MonthlyCharges)        AS Promedio_Cargo,
+        AVG(CAST(f.tenure AS FLOAT)) AS Promedio_Antiguedad
+    FROM Fact_Customers f
+    JOIN Dim_Churn ch ON f.ChurnID = ch.ChurnID
+    WHERE ch.Churn = 'Yes'
+)
+SELECT TOP 10
+    f.customerID                    AS ID_Cliente,
+    f.MonthlyCharges                AS Cargo_Mensual,
+    f.tenure                        AS Antiguedad_Meses,
+    ROUND(ABS(f.MonthlyCharges - p.Promedio_Cargo), 2)        AS Diferencia_Cargo,
+    ROUND(ABS(f.tenure         - p.Promedio_Antiguedad), 2)   AS Diferencia_Antiguedad,
+    ROUND(ABS(f.MonthlyCharges - p.Promedio_Cargo) +
+          ABS(f.tenure         - p.Promedio_Antiguedad), 2)   AS Score_Similitud
+FROM Fact_Customers f
+JOIN Dim_Churn ch ON f.ChurnID = ch.ChurnID
+CROSS JOIN PerfilChurn p
+WHERE ch.Churn = 'No'
+ORDER BY Score_Similitud ASC;
+```
+
+![P13 Benchmarking Clientes en Riesgo](./Picture/P13_Benchmarking_Riesgo.png)
+
+**Resultado Obtenido:**
+
+El análisis identifica a **0439-IFYUN** como el cliente activo con mayor
+similitud al perfil histórico de deserción con un score de apenas **0.28**,
+seguido de **7801-KICAO** y **3094-JOJAI** con 0.31. Los 10 clientes más
+similares comparten características críticas: **18 meses de antigüedad**
+y cargos mensuales entre $73 y $76, muy cercanos al perfil promedio del
+desertor histórico. El equipo de Customer Success debe contactar
+proactivamente a estos clientes con ofertas personalizadas de retención
+antes de que completen su segundo año, que es el punto de inflexión
+donde históricamente se concentra la mayor deserción.
+
+**Pregunta #14 — Auditoría de Brecha de Retención por Segmento:** ¿Cuál es
+la diferencia en tasa de churn de cada segmento de contrato respecto al
+estándar global de la compañía, y qué métodos de pago amplifican más esa
+brecha de deserción?
+
+Para calcular la brecha de cada segmento respecto al estándar global utilicé
+una **CTE** para obtener la tasa global de churn y un `CROSS JOIN` para
+compararla contra cada combinación de contrato y método de pago, obteniendo
+la desviación positiva o negativa respecto al promedio de la compañía.
+
+```sql
+WITH TasaGlobal AS (
+    SELECT
+        ROUND(
+            CAST(SUM(CASE WHEN ch.Churn = 'Yes' THEN 1 ELSE 0 END) AS FLOAT)
+            / COUNT(*) * 100, 2) AS Tasa_Global
+    FROM Fact_Customers f
+    JOIN Dim_Churn ch ON f.ChurnID = ch.ChurnID
+)
+SELECT
+    ct.Contract                 AS Tipo_Contrato,
+    ct.PaymentMethod            AS Metodo_Pago,
+    COUNT(*)                    AS Total_Clientes,
+    ROUND(
+        CAST(SUM(CASE WHEN ch.Churn = 'Yes' THEN 1 ELSE 0 END) AS FLOAT)
+        / COUNT(*) * 100, 2)    AS Tasa_Segmento,
+    ROUND(
+        CAST(SUM(CASE WHEN ch.Churn = 'Yes' THEN 1 ELSE 0 END) AS FLOAT)
+        / COUNT(*) * 100, 2) - tg.Tasa_Global AS Brecha_vs_Global
+FROM Fact_Customers f
+JOIN Dim_Churn    ch ON f.ChurnID    = ch.ChurnID
+JOIN Dim_Contrato ct ON f.ContractID = ct.ContractID
+CROSS JOIN TasaGlobal tg
+GROUP BY ct.Contract, ct.PaymentMethod, tg.Tasa_Global
+ORDER BY Brecha_vs_Global DESC;
+```
+
+![P14 Auditoría Brecha de Retención](./Picture/P14_Brecha_Retencion.png)
+
+**Resultado Obtenido:**
+
+La mayor brecha positiva la registra **Mes a Mes con Cheque Electrónico**
+con **+27.19 puntos** sobre la tasa global de 26.54%, alcanzando una tasa
+de deserción del 53.73% — el segmento más crítico de toda la compañía.
+Los contratos **Mes a Mes** con cualquier método de pago superan el
+estándar global, siendo el cheque electrónico el que más amplifica la
+brecha. En contraste, todos los segmentos de **Dos Años** presentan
+brechas negativas, destacando **Dos Años con Tarjeta de Crédito** con
+**-24.3 puntos**, confirmando que este segmento desertan muy por debajo
+del promedio. La compañía debe actuar urgentemente sobre la combinación
+Mes a Mes con Cheque Electrónico como prioridad absoluta de retención.
+
+**Pregunta #15 — Proyección de Carga de Retención (Workload):** ¿Cuántos
+clientes activos de alto riesgo proyecta cada segmento contractual para
+el próximo horizonte de análisis, utilizando el perfil histórico de churn
+para anticipar la presión sobre el equipo de Customer Success?
+
+Para proyectar la carga de retención utilicé dos **CTEs encadenadas**: la
+primera calcula la tasa histórica de churn por tipo de contrato y la segunda
+obtiene los clientes activos con su cargo promedio, combinándolas para
+proyectar los clientes en riesgo y el revenue proyectado en riesgo mediante
+una multiplicación de tasas.
+
+```sql
+WITH TasaHistorica AS (
+    SELECT
+        ct.Contract                  AS Tipo_Contrato,
+        ROUND(
+            CAST(SUM(CASE WHEN ch.Churn = 'Yes' THEN 1 ELSE 0 END) AS FLOAT)
+            / COUNT(*) * 100, 2)     AS Tasa_Historica_Churn
+    FROM Fact_Customers f
+    JOIN Dim_Churn    ch ON f.ChurnID    = ch.ChurnID
+    JOIN Dim_Contrato ct ON f.ContractID = ct.ContractID
+    GROUP BY ct.Contract
+),
+ClientesActivos AS (
+    SELECT
+        ct.Contract                  AS Tipo_Contrato,
+        COUNT(*)                     AS Total_Activos,
+        ROUND(AVG(f.MonthlyCharges), 2) AS Cargo_Promedio
+    FROM Fact_Customers f
+    JOIN Dim_Churn    ch ON f.ChurnID    = ch.ChurnID
+    JOIN Dim_Contrato ct ON f.ContractID = ct.ContractID
+    WHERE ch.Churn = 'No'
+    GROUP BY ct.Contract
+)
+SELECT
+    ca.Tipo_Contrato,
+    ca.Total_Activos,
+    th.Tasa_Historica_Churn,
+    ca.Cargo_Promedio,
+    ROUND(ca.Total_Activos * th.Tasa_Historica_Churn / 100, 0)
+                                     AS Clientes_En_Riesgo_Proyectado,
+    ROUND(ca.Total_Activos * th.Tasa_Historica_Churn / 100
+          * ca.Cargo_Promedio, 2)    AS Revenue_Proyectado_En_Riesgo
+FROM ClientesActivos ca
+JOIN TasaHistorica   th ON ca.Tipo_Contrato = th.Tipo_Contrato
+ORDER BY Clientes_En_Riesgo_Proyectado DESC;
+```
+
+![P15 Proyección Carga de Retención](./Picture/P15_Proyeccion_Workload.png)
+
+**Resultado Obtenido:**
+
+La proyección revela que el segmento **Mes a Mes** concentrará la mayor
+presión con **948 clientes en riesgo proyectado** y un revenue en riesgo
+de **$58,274.04** — representando el 84% de la carga total del equipo de
+Customer Success. Los contratos **Un Año** proyectan 147 clientes en riesgo
+con $9,207.65 en juego, mientras que **Dos Años** solo 47 clientes con
+$2,797.07. Esto permite al equipo planificar sus recursos de retención con
+anticipación: priorizar el 85% del esfuerzo en clientes Mes a Mes,
+implementar alertas tempranas para los 147 clientes de Un Año en riesgo
+y mantener un monitoreo ligero sobre los contratos bianuales que
+históricamente han demostrado ser los más estables.
