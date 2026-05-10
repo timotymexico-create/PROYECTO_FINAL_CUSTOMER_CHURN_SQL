@@ -124,3 +124,68 @@ SQL Server Management Studio (SSMS), separando atributos descriptivos en dimensi
 y concentrando las métricas cuantitativas en la tabla de hechos central.
 
 ---
+### 1. Importe y Carga de Datos
+
+Debido a las restricciones de importación en **SQL Server (SSMS)**, se optó
+por `BULK INSERT` como estrategia de carga, configurando inicialmente todas
+las columnas como `NVARCHAR` para evitar pérdida de datos en la importación.
+
+- Se creó la tabla staging `Telco_Customer_Churn` con todas las columnas en texto plano.
+- **Cambio de Tipos:** Mediante scripts SQL se transformaron las columnas numéricas
+a sus formatos correctos (`FLOAT`, `INT`), garantizando el manejo de datos posterior.
+
+```sql
+-- Fragmento del proceso de carga
+BULK INSERT Telco_Customer_Churn
+FROM 'C:\...\WA_Fn-UseC_-Telco-Customer-Churn.csv'
+WITH (FORMAT='CSV', FIRSTROW=2, FIELDTERMINATOR=',', ROWTERMINATOR='\n');
+```
+
+
+### 2. Normalización de Datos (Star Schema)
+
+Para optimizar las consultas, se realizó una **Normalización**, separando
+la tabla plana en un **Esquema Estrella (Star Schema)**:
+
+- **Tabla de Hechos:** `Fact_Customers`
+- **Tablas de Dimensiones:** `Dim_Cliente`, `Dim_Contrato`, `Dim_Servicios` y `Dim_Churn`
+
+```sql
+-- Fragmento del proceso de normalización (se aplicó la misma lógica para cada tabla)
+CREATE TABLE Dim_Cliente (
+    ClienteID     INT IDENTITY(1,1) PRIMARY KEY,
+    customerID    NVARCHAR(50),
+    Gender        NVARCHAR(10),
+    SeniorCitizen NVARCHAR(5),
+    Partner       NVARCHAR(5),
+    Dependents    NVARCHAR(5)
+);
+
+-- Insertar los datos únicos
+INSERT INTO Dim_Cliente (customerID, Gender, SeniorCitizen, Partner, Dependents)
+SELECT DISTINCT customerID, gender, SeniorCitizen, Partner, Dependents
+FROM Telco_Customer_Churn;
+```
+### 3. Limpieza y Verificación de Datos
+
+A pesar de la calidad general del dataset, se ejecutaron scripts para
+asegurar el análisis óptimo:
+
+- **Verificación:** Se identificaron **11 registros** con `TotalCharges` vacío,
+correspondientes a clientes nuevos con `tenure = 0`.
+- **Conversión de Tipos:** Las columnas `MonthlyCharges` y `TotalCharges`
+se convirtieron de `NVARCHAR` a `FLOAT`, y `tenure` de `NVARCHAR` a `INT`.
+- **Eliminación de Redundancias:** Los valores vacíos en `TotalCharges`
+se trataron con `NULLIF` y `REPLACE` para evitar errores en cálculos.
+
+```sql
+-- Verificación de registros vacíos
+SELECT COUNT(*) AS TotalCharges_Vacios
+FROM Telco_Customer_Churn
+WHERE TotalCharges = ' ' OR TotalCharges IS NULL;
+
+-- Conversión de tipos aplicada en Fact_Customers
+CAST(t.tenure AS INT)                                     AS tenure,
+CAST(t.MonthlyCharges AS FLOAT)                           AS MonthlyCharges,
+CAST(NULLIF(REPLACE(t.TotalCharges,' ',''),'') AS FLOAT)  AS TotalCharges
+```
