@@ -984,6 +984,6 @@ segmento A con programas exclusivos de fidelización es prioritario.
 
 ---
 
-> _"Los datos no mienten: la retención de clientes no es un problema de
+> _Los datos no mienten: la retención de clientes no es un problema de
 > precio sino de valor percibido, compromiso contractual y experiencia
-> en los primeros meses de servicio."_
+> en los primeros meses de servicio._
