@@ -417,5 +417,245 @@ con el servicio. La compañía debería diseñar campañas de retención
 específicas para clientes mayores sin núcleo familiar, al ser el segmento
 demográfico de mayor riesgo.
 
+---
 
+### BLOQUE B: Inteligencia de Negocio y Segmentación de Valor
+
+**Pregunta #6 — Estacionalidad del Abandono por Antigüedad:** ¿Cuál es la
+tasa de churn agrupada en cohortes de antigüedad (0–12, 13–24, 25–48,
+49–72 meses) y en qué horizonte temporal se concentra la mayor pérdida
+de clientes?
+
+Para analizar el comportamiento del churn según la antigüedad del cliente,
+utilicé `CASE WHEN` con `BETWEEN` para crear cohortes de tiempo y `GROUP BY`
+para calcular la tasa de deserción y cargo promedio por cada horizonte temporal.
+
+```sql
+SELECT
+    CASE
+        WHEN f.tenure BETWEEN 0  AND 12 THEN '0-12 meses'
+        WHEN f.tenure BETWEEN 13 AND 24 THEN '13-24 meses'
+        WHEN f.tenure BETWEEN 25 AND 48 THEN '25-48 meses'
+        WHEN f.tenure BETWEEN 49 AND 72 THEN '49-72 meses'
+    END                     AS Cohorte_Antiguedad,
+    COUNT(*)                AS Total_Clientes,
+    SUM(CASE WHEN ch.Churn = 'Yes' THEN 1 ELSE 0 END) AS Total_Desertores,
+    ROUND(
+        CAST(SUM(CASE WHEN ch.Churn = 'Yes' THEN 1 ELSE 0 END) AS FLOAT)
+        / COUNT(*) * 100, 2) AS Tasa_Desercion_Pct,
+    ROUND(AVG(f.MonthlyCharges), 2) AS Cargo_Mensual_Promedio
+FROM Fact_Customers f
+JOIN Dim_Churn ch ON f.ChurnID = ch.ChurnID
+GROUP BY
+    CASE
+        WHEN f.tenure BETWEEN 0  AND 12 THEN '0-12 meses'
+        WHEN f.tenure BETWEEN 13 AND 24 THEN '13-24 meses'
+        WHEN f.tenure BETWEEN 25 AND 48 THEN '25-48 meses'
+        WHEN f.tenure BETWEEN 49 AND 72 THEN '49-72 meses'
+    END
+ORDER BY Tasa_Desercion_Pct DESC;
+```
+
+![P6 Estacionalidad Abandono por Antigüedad](./Picture/P6_Estacionalidad_Antiguedad.png)
+
+**Resultado Obtenido:**
+
+El grupo de clientes con 0 a 12 meses de antigüedad concentra la mayor tasa de deserción con
+**47.44%**, siendo el periodo más crítico para la retención con 1,037
+desertores sobre 2,186 clientes y el cargo mensual promedio más bajo de
+$56.1. A medida que aumenta la antigüedad, la tasa de churn cae
+drásticamente — los clientes de **49 a 72 meses** presentan apenas
+**9.51%** de deserción con el cargo promedio más alto de $73.95,
+confirmando que los primeros 12 meses son la ventana de intervención
+más crítica. La compañía debe enfocar sus estrategias de onboarding
+y fidelización en los clientes nuevos para superar esa barrera inicial
+y convertirlos en clientes de largo plazo.
+
+**Pregunta #7 — Elasticidad del Cargo Mensual:** ¿Cómo impactan los rangos
+de cargo mensual (bajo, medio, alto) en la probabilidad de churn y qué
+umbral de precio representa el punto de quiebre en la fidelización del cliente?
+
+Para analizar el impacto del precio en la deserción, utilicé `CASE WHEN`
+para segmentar los cargos mensuales en tres rangos y `GROUP BY` para
+calcular la tasa de deserción y cargo promedio por cada segmento de precio.
+
+```sql
+SELECT
+    CASE
+        WHEN f.MonthlyCharges <= 35 THEN 'Bajo (0-35)'
+        WHEN f.MonthlyCharges <= 65 THEN 'Medio (36-65)'
+        ELSE                             'Alto (66+)'
+    END                      AS Rango_Cargo,
+    COUNT(*)                 AS Total_Clientes,
+    SUM(CASE WHEN ch.Churn = 'Yes' THEN 1 ELSE 0 END) AS Total_Desertores,
+    ROUND(
+        CAST(SUM(CASE WHEN ch.Churn = 'Yes' THEN 1 ELSE 0 END) AS FLOAT)
+        / COUNT(*) * 100, 2) AS Tasa_Desercion_Pct,
+    ROUND(AVG(f.MonthlyCharges), 2) AS Cargo_Promedio
+FROM Fact_Customers f
+JOIN Dim_Churn ch ON f.ChurnID = ch.ChurnID
+GROUP BY
+    CASE
+        WHEN f.MonthlyCharges <= 35 THEN 'Bajo (0-35)'
+        WHEN f.MonthlyCharges <= 65 THEN 'Medio (36-65)'
+        ELSE                             'Alto (66+)'
+    END
+ORDER BY Tasa_Desercion_Pct DESC;
+```
+
+![P7 Elasticidad Cargo Mensual](./Picture/P7_Elasticidad_Cargo.png)
+
+**Resultado Obtenido:**
+
+Los clientes con cargo **Alto (más de 66)** presentan la mayor tasa de
+deserción con **34.73%**, concentrando 1,354 desertores sobre 3,899
+clientes con un cargo promedio de $88.44. Esto revela que los clientes
+que pagan más son paradójicamente los más propensos a abandonar,
+sugiriendo una percepción de valor insuficiente frente al precio pagado.
+En contraste, el segmento de cargo **Bajo (hasta 35)** muestra apenas
+**10.89%** de deserción, confirmando que a menor precio, mayor tolerancia
+y permanencia. El punto de quiebre crítico se encuentra en los $66 mensuales,
+umbral a partir del cual la compañía debe reforzar la propuesta de valor
+con servicios adicionales para justificar el precio y reducir la deserción.
+
+**Pregunta #8 — Clasificación ABC de Clientes por CLV:** ¿Qué clientes
+pertenecen a la clase A al representar el mayor Customer Lifetime Value
+acumulado (`TotalCharges`) y cuál es su tasa de churn frente a los
+segmentos B y C?
+
+Para clasificar los clientes por valor acumulado utilicé la **Window
+Function** `NTILE(3)` dentro de una **CTE** para dividir la base en
+tres tercios iguales ordenados por `TotalCharges` descendente,
+etiquetando cada grupo con `CASE WHEN`.
+
+```sql
+WITH ClasificacionABC AS (
+    SELECT
+        f.customerID,
+        f.TotalCharges,
+        ch.Churn,
+        NTILE(3) OVER (ORDER BY f.TotalCharges DESC) AS Clase
+    FROM Fact_Customers f
+    JOIN Dim_Churn ch ON f.ChurnID = ch.ChurnID
+    WHERE f.TotalCharges IS NOT NULL
+)
+SELECT
+    CASE Clase
+        WHEN 1 THEN 'A - Alto Valor'
+        WHEN 2 THEN 'B - Valor Medio'
+        WHEN 3 THEN 'C - Bajo Valor'
+    END                  AS Clasificacion_ABC,
+    COUNT(*)             AS Total_Clientes,
+    SUM(CASE WHEN Churn = 'Yes' THEN 1 ELSE 0 END) AS Total_Desertores,
+    ROUND(
+        CAST(SUM(CASE WHEN Churn = 'Yes' THEN 1 ELSE 0 END) AS FLOAT)
+        / COUNT(*) * 100, 2) AS Tasa_Desercion_Pct,
+    ROUND(AVG(TotalCharges), 2) AS CLV_Promedio
+FROM ClasificacionABC
+GROUP BY Clase
+ORDER BY Clase;
+```
+
+![P8 Clasificación ABC](./Picture/P8_Clasificacion_ABC.png)
+
+**Resultado Obtenido:**
+
+La clasificación ABC revela una relación inversa entre valor del cliente
+y riesgo de deserción. Los clientes **Clase A** de alto valor con un CLV
+promedio de **$5,103.4** presentan la tasa de deserción más baja con
+**16.51%**, mientras que los clientes **Clase C** de bajo valor con CLV
+promedio de apenas **$247.13** concentran la mayor deserción con **39.51%**.
+Esto indica que los clientes más rentables tienden a ser más leales,
+posiblemente por tener contratos más largos y mayor adopción de servicios.
+La compañía debe proteger a toda costa el segmento A implementando
+programas de fidelización exclusivos, mientras diseña estrategias para
+elevar el valor de los clientes C antes de que abandonen el servicio.
+
+**Pregunta #9 — Oportunidades de Retención por Paquete de Servicios:** ¿Cuál
+es el promedio de servicios contratados por cliente según su condición de churn
+para identificar el nivel mínimo de adopción que actúa como barrera de salida?
+
+Para identificar qué tipo de servicio de internet actúa como barrera de
+salida, utilicé `GROUP BY` sobre `Dim_Servicios` y `Dim_Churn` con `AVG`
+para calcular el cargo promedio por tipo de servicio y condición de deserción,
+usando `TOP 5` para mostrar los segmentos más representativos.
+
+```sql
+SELECT TOP 5
+    s.InternetService           AS Servicio_Internet,
+    ch.Churn                    AS Estado_Cliente,
+    COUNT(*)                    AS Total_Clientes,
+    ROUND(AVG(f.MonthlyCharges), 2) AS Cargo_Promedio
+FROM Fact_Customers f
+JOIN Dim_Churn     ch ON f.ChurnID    = ch.ChurnID
+JOIN Dim_Servicios s  ON f.ServicioID = s.ServicioID
+GROUP BY s.InternetService, ch.Churn
+ORDER BY Total_Clientes DESC;
+```
+
+![P9 Retención por Paquete de Servicios](./Picture/P9_Retencion_Servicios.png)
+
+**Resultado Obtenido:**
+
+Los clientes con **Fibra Óptica** presentan el mayor cargo promedio de
+**$93.93** entre los activos, pero también concentran **1,297 desertores**
+con un cargo promedio de $88.13 — el segmento de mayor pérdida económica.
+En contraste, los clientes con **DSL** muestran mayor estabilidad con solo
+459 desertores y cargo promedio de $49.08, sugiriendo que este servicio
+genera mayor satisfacción relativa al precio. Los clientes **sin servicio
+de internet** presentan el cargo más bajo de $21.14 y la mayor base de
+clientes activos con 1,413, confirmando que la fibra óptica, a pesar de
+ser el servicio premium, no está generando suficiente valor percibido
+para justificar su precio y retener a los clientes.
+
+**Pregunta #10 — Evolución del Revenue en Riesgo por Cohorte:** ¿Cuál es el
+cargo mensual total en riesgo por cada grupo de antigüedad y en qué segmento
+se concentra la mayor pérdida económica proyectada?
+
+Para calcular el revenue en riesgo por grupo de antigüedad utilicé una
+**CTE** para crear los grupos con `CASE WHEN` y `BETWEEN`, calculando
+el revenue perdido con `SUM` condicional y el cargo promedio de desertores
+con `AVG` filtrado por condición de churn.
+
+```sql
+WITH RevenuePorCohorte AS (
+    SELECT
+        CASE
+            WHEN f.tenure BETWEEN 0  AND 12 THEN '0-12 meses'
+            WHEN f.tenure BETWEEN 13 AND 24 THEN '13-24 meses'
+            WHEN f.tenure BETWEEN 25 AND 48 THEN '25-48 meses'
+            WHEN f.tenure BETWEEN 49 AND 72 THEN '49-72 meses'
+        END                  AS Grupo_Antiguedad,
+        f.MonthlyCharges,
+        ch.Churn
+    FROM Fact_Customers f
+    JOIN Dim_Churn ch ON f.ChurnID = ch.ChurnID
+)
+SELECT
+    Grupo_Antiguedad,
+    COUNT(*)                 AS Total_Clientes,
+    SUM(CASE WHEN Churn = 'Yes' THEN 1 ELSE 0 END)        AS Total_Desertores,
+    ROUND(SUM(CASE WHEN Churn = 'Yes' THEN MonthlyCharges ELSE 0 END), 2)
+                             AS Revenue_En_Riesgo,
+    ROUND(AVG(CASE WHEN Churn = 'Yes' THEN MonthlyCharges END), 2)
+                             AS Cargo_Promedio_Desertor
+FROM RevenuePorCohorte
+GROUP BY Grupo_Antiguedad
+ORDER BY Revenue_En_Riesgo DESC;
+```
+
+![P10 Revenue en Riesgo por Cohorte](./Picture/P10_Revenue_Riesgo_Cohorte.png)
+
+**Resultado Obtenido:**
+
+El grupo de **0 a 12 meses** concentra el mayor revenue en riesgo con
+**68,954.25**, representando casi la mitad del total perdido con 1,037
+desertores y un cargo promedio de 66.49. Paradójicamente, el grupo de
+**49 a 72 meses** presenta el cargo promedio más alto de **92.17** por
+desertor, lo que significa que aunque desertan menos clientes antiguos,
+cada uno que se va representa una pérdida económica significativamente
+mayor. Esto refuerza la necesidad de una doble estrategia: retener
+masivamente a los clientes nuevos en sus primeros 12 meses y proteger
+individualmente a los clientes de alto valor con larga antigüedad
+mediante programas de fidelización exclusivos.
 
