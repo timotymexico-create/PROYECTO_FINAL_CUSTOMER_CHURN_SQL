@@ -28,6 +28,7 @@ El conjunto de datos captura información detallada sobre el comportamiento y pe
 Para mayor información sobre la fuente de datos original puedes encontrarla en este [Link](https://www.kaggle.com/datasets/itszubi/customer-churn-dataset).
 
 El modelo cuenta con una tabla de hechos principal (`Fact_Customers`) y múltiples dimensiones para un análisis granular del comportamiento de deserción.
+![Esquema Estrella](./Picture/StarSchema.png)
 
 ---
 ## Habilidades SQL Aplicadas
