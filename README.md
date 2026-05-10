@@ -231,13 +231,191 @@ ORDER BY Tasa_Churn_Pct DESC;
 **Resultado Obtenido:**
 
 Los resultados revelan una brecha crítica entre modalidades contractuales.
-Los clientes **Month-to-month** presentan la tasa de churn más alarmante con
+Los clientes **Mes a Mes** presentan la tasa de churn más alarmante con
 un **42.71%**, concentrando **$120,847.10** del revenue mensual en riesgo 
 el **86.9% del total perdido**  con 1,655 desertores sobre 3,875 clientes.
-En contraste, los contratos **Two year** muestran una tasa mínima de apenas
+En contraste, los contratos **Dos años** muestran una tasa mínima de apenas
 **2.83%** con solo $4,165.30 en riesgo, confirmando que el compromiso
 contractual a largo plazo es el principal escudo contra la deserción.
 La compañía debe priorizar la migración de clientes mensuales hacia
 contratos anuales o bianuales como estrategia central de retención.
+
+**Pregunta #2 — Radar de Segmentación Contractual:** ¿Cuál es la tasa de churn
+y el cargo mensual promedio por tipo de contrato para identificar qué modalidad
+representa el mayor riesgo de deserción?
+
+Para identificar qué combinación de contrato y método de pago concentra mayor
+deserción, utilicé `GROUP BY` múltiple sobre `Dim_Contrato` combinado con
+`CASE WHEN` para calcular la tasa de deserción y `AVG` para obtener el cargo
+mensual promedio y la antigüedad media por segmento, uniendo `Fact_Customers`
+con `Dim_Churn` y `Dim_Contrato` mediante `INNER JOIN`.
+
+```sql
+SELECT
+    ct.Contract                                                         AS Tipo_Contrato,
+    ct.PaymentMethod                                                    AS Metodo_Pago,
+    COUNT(*)                                                            AS Total_Clientes,
+    SUM(CASE WHEN ch.Churn = 'Yes' THEN 1 ELSE 0 END)                 AS Total_Desertores,
+    ROUND(
+        CAST(SUM(CASE WHEN ch.Churn = 'Yes' THEN 1 ELSE 0 END) AS FLOAT)
+        / COUNT(*) * 100, 2
+    )                                                                   AS Tasa_Desercion_Pct,
+    ROUND(AVG(f.MonthlyCharges), 2)                                    AS Cargo_Mensual_Promedio,
+    ROUND(AVG(CAST(f.tenure AS FLOAT)), 2)                             AS Antiguedad_Promedio_Meses
+FROM Fact_Customers f
+JOIN Dim_Churn    ch ON f.ChurnID    = ch.ChurnID
+JOIN Dim_Contrato ct ON f.ContractID = ct.ContractID
+GROUP BY ct.Contract, ct.PaymentMethod
+ORDER BY Tasa_Desercion_Pct DESC;
+```
+
+![P2 Radar Segmentación Contractual](./Picture/P2_Radar_Contractual.png)
+
+**Resultado Obtenido:**
+
+El análisis revela que la combinación más crítica es **Mes a Mes con Cheque
+Electrónico**, alcanzando una tasa de deserción del **53.73%** — más de la
+mitad de sus 1,850 clientes abandonó el servicio — con un cargo mensual
+promedio de $74.99 y apenas 17.97 meses de antigüedad promedio, la más baja
+de todos los segmentos. En contraste, los clientes con contrato **Dos Años
+con Tarjeta de Crédito** presentan la tasa más baja con apenas **2.24%**
+y una antigüedad promedio de 59.81 meses, casi el triple. Esto confirma que
+la combinación de contrato mensual y método de pago manual es la señal de
+alerta más temprana de deserción, mientras que los métodos automáticos
+combinados con contratos largos generan mayor fidelización y estabilidad
+en la base de clientes.
+
+**Pregunta #3 — Auditoría de Métodos de Pago:** ¿Qué método de pago concentra
+la mayor proporción de clientes con churn y cómo se distribuye el revenue
+perdido entre cada modalidad de cobro?
+
+Para identificar qué método de pago concentra mayor deserción y pérdida
+económica, utilicé `GROUP BY` sobre `Dim_Contrato`, combinando `CASE WHEN`
+para separar desertores de activos y una **Window Function** `SUM() OVER()`
+para calcular la participación porcentual de cada método sobre el revenue
+total perdido.
+
+```sql
+SELECT TOP 4
+    ct.PaymentMethod        AS Metodo_Pago,
+    COUNT(*)                AS Total_Clientes,
+    SUM(CASE WHEN ch.Churn = 'Yes' THEN 1 ELSE 0 END) AS Total_Desertores,
+    ROUND(
+        CAST(SUM(CASE WHEN ch.Churn = 'Yes' THEN 1 ELSE 0 END) AS FLOAT)
+        / COUNT(*) * 100, 2) AS Tasa_Desercion_Pct,
+    ROUND(SUM(CASE WHEN ch.Churn = 'Yes' THEN f.MonthlyCharges ELSE 0 END), 2)
+                            AS Revenue_Perdido
+FROM Fact_Customers f
+JOIN Dim_Churn    ch ON f.ChurnID    = ch.ChurnID
+JOIN Dim_Contrato ct ON f.ContractID = ct.ContractID
+GROUP BY ct.PaymentMethod
+ORDER BY Revenue_Perdido DESC;
+```
+
+![P3 Auditoría Métodos de Pago](./Picture/P3_Auditoria_Metodos_Pago.png)
+
+**Resultado Obtenido:**
+
+El **Cheque Electrónico** se posiciona como el método de pago más crítico,
+concentrando el **60.58% del revenue mensual perdido** con $84,288.75 en
+riesgo y una tasa de deserción del 45.29% — la más alta de los cuatro
+métodos. Sus 1,071 desertores sobre 2,365 clientes revelan que casi 1 de
+cada 2 usuarios con este método abandona el servicio. En contraste, los
+métodos automáticos (**Transferencia Bancaria** y **Tarjeta de Crédito**)
+presentan tasas significativamente menores de 16.71% y 15.24%
+respectivamente, confirmando que la automatización del cobro actúa como
+factor de retención al reducir la fricción en el proceso de pago. El equipo
+comercial debería incentivar la migración hacia métodos automáticos como
+palanca de fidelización inmediata.
+
+**Pregunta #4 — Ranking de Servicios Críticos:** ¿Qué servicios adicionales
+(soporte técnico, seguridad en línea, respaldo en nube) tienen menor adopción
+entre los clientes que abandonaron, revelando los gaps de valor que aceleran
+la deserción?
+
+Para identificar los servicios con menor adopción entre desertores, utilicé
+`UNION ALL` para consolidar múltiples servicios en una sola tabla de resultados,
+combinando `CASE WHEN` para filtrar desertores sin cada servicio contratado,
+uniendo `Fact_Customers` con `Dim_Churn` y `Dim_Servicios` mediante `INNER JOIN`.
+
+```sql
+SELECT TOP 3
+    'Seguridad en Linea'    AS Servicio,
+    SUM(CASE WHEN ch.Churn = 'Yes' AND s.OnlineSecurity = 'No' THEN 1 ELSE 0 END)
+                            AS Desertores_Sin_Servicio
+FROM Fact_Customers f
+JOIN Dim_Churn     ch ON f.ChurnID    = ch.ChurnID
+JOIN Dim_Servicios s  ON f.ServicioID = s.ServicioID
+UNION ALL
+SELECT 'Soporte Tecnico',
+    SUM(CASE WHEN ch.Churn = 'Yes' AND s.TechSupport = 'No' THEN 1 ELSE 0 END)
+FROM Fact_Customers f
+JOIN Dim_Churn     ch ON f.ChurnID    = ch.ChurnID
+JOIN Dim_Servicios s  ON f.ServicioID = s.ServicioID
+UNION ALL
+SELECT 'Respaldo en Nube',
+    SUM(CASE WHEN ch.Churn = 'Yes' AND s.OnlineBackup = 'No' THEN 1 ELSE 0 END)
+FROM Fact_Customers f
+JOIN Dim_Churn     ch ON f.ChurnID    = ch.ChurnID
+JOIN Dim_Servicios s  ON f.ServicioID = s.ServicioID;
+```
+
+![P4 Ranking Servicios Críticos](./Picture/P4_Ranking_Servicios.png)
+
+**Resultado Obtenido:**
+
+Los resultados evidencian que la **Seguridad en Línea** es el servicio con
+mayor ausencia entre desertores, con el **78.17%** de los clientes que
+abandonaron sin tenerlo contratado, seguido de **Soporte Técnico** con
+77.37% y **Respaldo en Nube** con 65.97%. Esto confirma que los clientes
+que no tienen servicios de valor agregado contratados tienen significativamente
+mayor probabilidad de abandonar, al no percibir suficiente valor en su
+suscripción. La compañía debería implementar estrategias de adopción de
+estos servicios como barrera de salida, ofreciendo periodos de prueba
+gratuitos a clientes en riesgo para incrementar su nivel de compromiso
+con la plataforma.
+
+**Pregunta #5 — Perfil Demográfico del Desertor:** ¿Cuál es la distribución
+de churn según género, condición de Senior Citizen, presencia de pareja y
+dependientes para construir el perfil demográfico del cliente en riesgo?
+
+Para construir el perfil demográfico del desertor utilicé `GROUP BY` múltiple
+sobre `Dim_Cliente` combinando `CASE WHEN` para calcular la tasa de deserción
+por cada combinación de atributos demográficos, con `TOP 10` para mostrar
+los segmentos más críticos ordenados por mayor tasa de deserción.
+
+```sql
+SELECT TOP 10
+    c.Gender                AS Genero,
+    c.SeniorCitizen         AS Cliente_Mayor,
+    c.Partner               AS Tiene_Pareja,
+    c.Dependents            AS Tiene_Dependientes,
+    COUNT(*)                AS Total_Clientes,
+    SUM(CASE WHEN ch.Churn = 'Yes' THEN 1 ELSE 0 END) AS Total_Desertores,
+    ROUND(
+        CAST(SUM(CASE WHEN ch.Churn = 'Yes' THEN 1 ELSE 0 END) AS FLOAT)
+        / COUNT(*) * 100, 2) AS Tasa_Desercion_Pct
+FROM Fact_Customers f
+JOIN Dim_Cliente c  ON f.ClienteID = c.ClienteID
+JOIN Dim_Churn  ch  ON f.ChurnID   = ch.ChurnID
+GROUP BY c.Gender, c.SeniorCitizen, c.Partner, c.Dependents
+ORDER BY Tasa_Desercion_Pct DESC;
+```
+
+![P5 Perfil Demográfico del Desertor](./Picture/P5_Perfil_Demografico.png)
+
+**Resultado Obtenido:**
+
+El perfil más crítico de deserción corresponde a **mujeres mayores (Senior)
+sin pareja y sin dependientes**, con una tasa del **49.84%** sobre 317
+clientes. En general, los clientes clasificados como **Senior Citizen**
+(valor 1) dominan los primeros 5 puestos del ranking con tasas entre
+33% y 49%, muy por encima del promedio global de 26.54%. Los clientes
+sin pareja y sin dependientes presentan consistentemente mayor deserción,
+sugiriendo que la ausencia de vínculos familiares reduce el compromiso
+con el servicio. La compañía debería diseñar campañas de retención
+específicas para clientes mayores sin núcleo familiar, al ser el segmento
+demográfico de mayor riesgo.
+
 
 
