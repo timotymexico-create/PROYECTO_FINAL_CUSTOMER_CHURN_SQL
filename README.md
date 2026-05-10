@@ -940,3 +940,50 @@ anticipación: priorizar el 85% del esfuerzo en clientes Mes a Mes,
 implementar alertas tempranas para los 147 clientes de Un Año en riesgo
 y mantener un monitoreo ligero sobre los contratos bianuales que
 históricamente han demostrado ser los más estables.
+
+---
+
+## Conclusiones Generales
+
+Se identificaron los siguientes hallazgos
+estratégicos para la toma de decisiones del departamento de Customer Success:
+
+### 1. El Contrato es el Principal Predictor de Deserción
+Los clientes con contrato **Mes a Mes** presentan una tasa de churn del
+**42.71%**, más de 15 veces superior a los contratos de **Dos Años** (2.83%).
+La migración contractual hacia compromisos de largo plazo es la palanca
+de retención de mayor impacto disponible para la compañía.
+
+### 2. Los Primeros 12 Meses son la Ventana Crítica
+El **47.44%** de los clientes con menos de un año abandona el servicio,
+concentrando **$68,954** del revenue mensual en riesgo. Un programa
+de onboarding robusto en los primeros 90 días puede reducir
+significativamente esta tasa.
+
+### 3. El Cheque Electrónico es una Señal de Alerta
+El método de pago manual concentra el **60.58%** del revenue perdido con
+una tasa de deserción del **45.29%**. Incentivar la migración hacia
+métodos automáticos de pago reduciría la deserción de forma inmediata.
+
+### 4. Los Clientes Sin Servicios de Valor Agregado Desertan Más
+El **78.17%** de los desertores no tenía Seguridad en Línea y el **77.37%**
+carecía de Soporte Técnico. Aumentar la adopción de estos servicios
+actúa como barrera de salida efectiva.
+
+### 5. El Scoring Identifica 1,941 Clientes en Riesgo Inmediato
+El modelo de scoring construido en el Bloque C identifica **1,941 clientes
+activos de Alto Riesgo** con cargo promedio de $66.26 y apenas 18.63 meses
+de antigüedad. Estos clientes representan la prioridad absoluta de
+intervención para el equipo de retención.
+
+### 6. Los Clientes de Alto Valor son los Más Leales
+La clasificación ABC confirma que los clientes **Clase A** con CLV promedio
+de **$5,103** presentan la menor tasa de deserción (16.51%), mientras que
+los clientes **Clase C** con CLV de $247 desertan al 39.51%. Proteger el
+segmento A con programas exclusivos de fidelización es prioritario.
+
+---
+
+> _"Los datos no mienten: la retención de clientes no es un problema de
+> precio sino de valor percibido, compromiso contractual y experiencia
+> en los primeros meses de servicio."_
